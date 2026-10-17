@@ -9,3 +9,16 @@ audit.txt
 /capture.png
 .scratch/
 tmp/
+
+# Video runtime / secrets
+**/__pycache__/
+*.pyc
+*.tts.json
+*.timing.json
+*.readings.txt
+*.wav
+**/voice/
+**/build/
+*.pem
+*.key
+credentials*

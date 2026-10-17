@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>拆开 H100</title>
+<style>
+  /* Anatomy 浅色配色；一种字体两种字重（标题粗、正文常规）；只用一个重点（由物件图自己的 lit 承担） */
+  :root { --paper:#fbfbfa; --strong:#18181a; --text:#57575a; --muted:#8c8c90; --rule:#b4b4b8; }
+  html, body { margin:0; background:var(--paper); overflow:hidden; }
+  #stage { position:relative; width:1920px; height:1080px; overflow:hidden; background:var(--paper); font-family:"Microsoft YaHei","Noto Sans SC",sans-serif; }
+  .fig { position:absolute; left:0; top:0; width:1920px; height:1080px; border:0; transform-origin:0 0; opacity:0; background:transparent; }
+  #col { position:absolute; left:110px; top:0; width:560px; height:1080px; }
+  .it { position:absolute; left:0; opacity:0; width:500px; white-space:normal; line-height:1.3; }
+  .k { font-weight:700; font-size:34px; color:var(--strong); }
+  .big { font-weight:700; font-size:96px; color:var(--strong); line-height:1; }
+  .mid { font-weight:700; font-size:56px; color:var(--strong); line-height:1; }
+  .unit { font-weight:400; font-size:30px; color:var(--muted); margin-left:12px; }
+  .sub { font-weight:400; font-size:28px; color:var(--text); }
+  .note { font-weight:400; font-size:24px; color:var(--muted); }
+  .rule { width:44px; height:3px; background:var(--strong); display:inline-block; vertical-align:middle; margin-right:16px; }
+  #subs { position:absolute; left:0; right:0; bottom:54px; text-align:center; font-weight:400; font-size:34px; color:var(--strong); line-height:1.45; }
+</style></head>
+<body><div id="stage"><div id="figs"></div><div id="col"></div><div id="subs"></div></div>
+<script src="timeline.js"></script>
+<script>
+// 只由时间 t 决定：window.render(t) 画出第 t 秒。镜头切换在句首字前 0.2 秒。
+const TL = window.TL, $ = (s) => document.querySelector(s);
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const ease = (x) => { x = clamp01(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const D = (t, t0, d = .6) => ease((t - t0) / d);
+
+// ---------- 实测时间 ----------
+const FULL = TL.chars.map((c) => c[0]).join("");
+const missing = [];
+// 预检用：每个锚点、切点都记下来（window.__anchors / window.__cuts），不影响画面
+const ANCH = window.__anchors = new Map(), CUTS = window.__cuts = new Map();
+function A(str, n = 1) { let i = -1; for (let k = 0; k < n; k++) { i = FULL.indexOf(str, i + 1); if (i < 0) { missing.push(str); return 0; } }
+  if (!ANCH.has(str + "#" + n)) ANCH.set(str + "#" + n, { str, n, i, t: TL.chars[i][1], measured: TL.chars[i][3] ?? null, count: FULL.split(str).length - 1 });
+  return TL.chars[i][1]; }
+// 句首前 0.2 秒切镜头：找到包含该锚点的句子，取句首
+function CUT(str, n = 1) { const t = A(str, n); const s = TL.sentences.findLast((s) => t >= s.s - 0.05); CUTS.set(str + "#" + n, { str, n, anchor: t, sent: s ? s.s : null, text: s ? s.text : "", cut: (s ? s.s : t) - 0.2 }); return (s ? s.s : t) - 0.2; }   // 取锚点所在的最后一句：前句句尾和后句句首挨着时不会误取前句
+const END = TL.duration + 2.5;
+
+// ---------- 物件图 ----------
+const FIGS = ["hgx", "sxm5", "pkg", "die", "sm", "cluster", "fp8", "te", "topo"];
+const frames = {};
+for (const f of FIGS) { const el = document.createElement("iframe"); el.className = "fig"; el.src = `../../anatomy/${f}/${f}-light.html`; $("#figs").appendChild(el); frames[f] = el; }
+const W = (f) => frames[f].contentWindow;
+
+// 版式：full = 物件居中铺满；right = 左侧文字栏，物件缩小放到右边（不出框：右缘 ≤ 1903，下缘 ≤ 847）
+const LAYOUT = { full: { x: 0, y: 30, s: 0.94 }, right: { x: 540, y: 100, s: 0.70 } };   // 留出 4% 推近的余量，推到底也不出框
+function place(f, alpha, lay, zoom = 1, focus = [960, 540]) {
+  const el = frames[f]; el.style.opacity = alpha; el.style.visibility = alpha > 0 ? "visible" : "hidden";
+  const x = lay.x + lay.s * focus[0] * (1 - zoom), y = lay.y + lay.s * focus[1] * (1 - zoom);
+  el.style.transform = `translate(${x}px,${y}px) scale(${lay.s * zoom})`;
+}
+// 镜头路径：[[时间, 焦点, 放大倍数], …]，相邻两点之间用 0.9 秒缓动过去
+function camPath(keys) {
+  const at = (t) => { let i = 0; while (i + 1 < keys.length && t >= keys[i + 1][0]) i++; const [t0, f0, z0] = keys[i];
+    if (i === 0 || t - t0 >= 0.9) return { f: f0, z: z0 }; const [, fp, zp] = keys[i - 1], k = ease((t - t0) / 0.9);
+    return { f: [fp[0] + (f0[0] - fp[0]) * k, fp[1] + (f0[1] - fp[1]) * k], z: zp + (z0 - zp) * k }; };
+  return { zoom: (t) => at(t).z, focusAt: (t) => at(t).f };
+}
+// 按零件名（前缀）点亮物件图里的零件；on 可以是函数 (序号) => 是否点亮
+function litBy(f, prefix, on) { W(f).document.querySelectorAll(`[data-name^="${prefix}"]`).forEach((g, i) => { const s = g.querySelector(".iso-solid"); if (!s) return;
+  if (typeof on === "function" ? on(i) : on) s.setAttribute("data-lit", ""); else s.removeAttribute("data-lit"); }); }
+function litSel(f, sel, on) { W(f).document.querySelectorAll(sel).forEach((g) => { const s = g.querySelector(".iso-solid"); if (!s) return; if (on) s.setAttribute("data-lit", ""); else s.removeAttribute("data-lit"); }); }
+// 开场组装：零件按前后顺序依次从上方落位（p 从 0 到 1）
+function assemble(f, p) { const kids = [...W(f).document.querySelector("[data-layer]").children], n = kids.length;
+  // 不透明：还没落下的零件不显示，落下过程中实心不透明（Anatomy 不允许半透明的实心体）；每帧完整重设，只由 p 决定
+  kids.forEach((g, i) => { const e = ease((p * 1.35 - i / n) / 0.35); g.style.opacity = e > 0 ? 1 : 0;
+    if (e < 1) g.setAttribute("transform", `translate(0 ${-60 * (1 - e)})`); else g.removeAttribute("transform"); }); }
+const mixLay = (a, b, k) => ({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, s: a.s + (b.s - a.s) * k });
+
+// ---------- 场景：每个场景一张物件图，场景之间叠化 0.35 秒 ----------
+let SC = [], COLS = [];
+function build() {
+  const c = {
+    sxm: CUT("拆掉散热器"), pkg: CUT("数一下"), die: CUT("再往里"), sm: CUT("放大一个SM"), cl: CUT("二是线程块集群"),
+    fp8: CUT("真正为大模型"), te: CUT("在H一百上"), back: CUT("现在一路退回去"), topo: CUT("回到底板"), end: CUT("所以H一百的思路"),
+  };
+  // 每个场景：fig、起止、版式（随时间）、姿态（随时间）
+  SC = [
+    { f: "hgx", t0: -1, t1: c.sxm, lay: (t) => LAYOUT.right, zoom: () => 1,
+      pose: (t) => {
+        const teaser = (a, b) => 0.32 * D(t, a, 1.0) * (1 - D(t, b, 1.0));
+        const hs = Math.max(D(t, A("拿起其中一颗") - .1, 1.4), teaser(A("一层层拆开") - .6, A("先说结论") - .4), teaser(A("本集说的") - .3, A("最外层") - .2));
+        assemble("hgx", clamp01((t - 0.2) / 5.5));               // 先重设组装状态，再让会动的零件按 render 的位移走
+        W("hgx").render(0, { hs, mod: D(t, A("SXM模组") - .4, 1.2), board: 0 });
+        const a8 = A("八颗H一百");
+        litBy("hgx", "hs.cover", (i) => (t >= a8 && t < a8 + 2.4 && i === Math.floor((t - a8) / 0.3)) || (t >= A("所以必须") && t < A("拿起其中一颗") - .3)
+          || (i === 0 && t >= A("光权重") - .1 && t < A("所以必须")));         // “单颗显存”：只点亮一颗
+        litBy("hgx", "nvs.fins", t >= A("第三代NVSwitch") - .1 && t < A("为什么要八颗"));
+        // 连接器：“信号从这里进出”点亮插座；“700 瓦”点亮被拿起的那块模组
+        litBy("hgx", "socket", t >= A("这里进出") - .2 && t < A("700瓦") - .3);
+        litBy("hgx", "module.focus", t >= A("700瓦") - .3);
+      } },
+    { f: "sxm5", t0: c.sxm, t1: c.pkg, lay: () => LAYOUT.right, pose: () => W("sxm5").render(0, { frame: 0, chips: 0, board: 0 }), zoom: (t) => 1 + 0.08 * D(t, A("中间是封装") - .2, 2.2), focus: [960, 470] },
+    { f: "pkg", t0: c.pkg, t1: c.die, lay: (t) => mixLay(LAYOUT.full, LAYOUT.right, D(t, A("数一下") , .7)),
+      pose: (t) => { const near = D(t, A("为什么显存") - .2, 1.4) * (1 - D(t, A("对大模型来说") - .2, 1.4)); const s = { far: 0, near };
+        for (let i = 0; i < 8; i++) s["L" + (i + 1)] = D(t, A("8层DRAM") - .6 + (7 - i) * .12, 1.0) * (1 - D(t, A("这样换来") + i * .06, 1.0)); W("pkg").render(0, s);
+        // 位宽 → 显存堆栈；普通电路板 → 基板；硅中介层 → 中介层，依次点亮
+        litSel("pkg", '[data-name^="hbm"]:not([data-name="hbm.sixth"])', t >= A("五千一百二十") - .2 && t < A("普通电路板") - .1);
+        litBy("pkg", "sub", t >= A("普通电路板") - .1 && t < A("硅中介层") - .2);
+        litBy("pkg", "interposer", t >= A("硅中介层") - .2 && t < A("每个堆栈") - .2); },
+      zoom: (t) => 1 + 0.14 * D(t, A("五千一百二十") - .3, 4.5) - 0.14 * D(t, A("对大模型来说") - .2, 2.4), focus: [860, 560] },
+    { f: "die", t0: c.die, t1: c.sm, lay: () => LAYOUT.right,
+      pose: (t) => { const lit = t < A("叫GPC") ? "die" : t < A("一共144个") ? "gpc" : t < A("二级缓存") ? null : t < A("左右两侧") ? "l2" : t < A("NVLink接口") ? "mc" : t < A("但H一百") ? "nv" : null;
+        W("die").pose({ gpc: D(t, A("8个大区") - .3, 1.6), sm: D(t, A("每组两个") - .2, 2.4), l2: D(t, A("二级缓存") - .2, .8), mc: D(t, A("左右两侧") - .2, 1.2), nv: D(t, A("NVLink接口") - .2, .8),
+          lit, gpcLit: lit === "gpc" ? Math.min(7, Math.max(0, Math.floor((t - A("8个大区")) / 0.28))) : null,
+          cutSm: t > A("SM启用132个") && !(t >= A("局部制造缺陷") - .1 && t < A("关闭一部分单元") - .1), cutL2: t > A("缓存启用50兆字节"), cutMc: t > A("显存控制器启用10个") });
+        litSel("die", "[data-cut][data-sm]", t >= A("关闭一部分单元") - .1 && t < A("NVIDIA公开的是"));
+        // “对应 6 个显存位置”点亮 6 个位置；“对应 5 个有效堆栈”只点亮 5 个
+        const h6 = t >= A("对应6个显存位置") - .1 && t < A("NVLink接口") - .2, h5 = t >= A("对应5个有效堆栈") - .1 && t < A("芯片行业的一般做法") - .2;
+        litSel("die", "[data-hbm]", h6 || h5); if (h5) litSel("die", "[data-hbm='6']", false); }, zoom: (t) => 1 + 0.1 * D(t, A("芯片行业的一般做法") - .3, 1.8) - 0.1 * D(t, A("NVIDIA公开的是") - .2, 1.8) },
+    { f: "sm", t0: c.sm, t1: c.cl, lay: () => LAYOUT.right,
+      pose: (t) => { const lit = t < A("4个执行分区") ? null : t < A("调度器和寄存器") ? "[data-part]" : t < A("32个FP32") ? "[data-sched]" : t < A("1个TensorCore") ? "[data-regs]" : t < A("132个SM加起来") ? "[data-tc]" : t < A("共用256千字节") ? null : t < A("Hopper在这里") ? "[data-smem]" : t < A("一是TMA") ? null : "[data-tma]";
+        const T0 = A("成块地搬数据") - .3;
+        W("sm").pose({ lit, split: D(t, A("L1和共享内存合用") - .3, 1.4) * (1 - D(t, A("Hopper在这里"), .8)), ...(t > T0 ? W("sm").loadState(t, T0) : {}) }); }, zoom: () => 1 },
+    { f: "cluster", t0: c.cl, t1: c.fp8, lay: () => LAYOUT.right,
+      pose: (t) => W("cluster").pose({ blocks: [0, 1, 2].map((i) => clamp01((t - A("一组线程块") - i * .25) / 1.0)), clamp: D(t, A("同一个GPC") - .2, 1.2), bridge: D(t, A("分布式共享内存") - .3, .8),
+        lit: t < A("同一个GPC") ? "block" : t < A("分布式共享内存") ? "clamp" : "bridge" }), zoom: () => 1 },
+    { f: "fp8", t0: c.fp8, t1: c.te, lay: () => LAYOUT.right,
+      pose: (t) => { const m = A("矩阵乘法"); W("fp8").pose({ step: t > m - .4 && t < A("新支持FP8") ? Math.floor((t - m + .4) / 0.9) % 4 : null,
+        pins16: clamp01((t - A("新支持FP8") + .2) / 2.4), press: (clamp01((t - A("编码成8位") + .2) / 2.6) * 2) % 1, out: D(t, A("舍入和缩放") + .4, 1.0),
+        drawers: D(t, A("同样多的数") - .2, 1.0), lit: t < A("舍入和缩放") - .4 ? null : t < A("同样多的数") - .2 ? "press" : "drawers" }); },
+      // 编码成 8 位的过程推近到压机，看清针脚；“同样多的数”拉回看抽屉
+      zoom: (t) => 1 + 0.12 * D(t, A("新支持FP8") - .3, 1.6) - 0.12 * D(t, A("同样多的数") - .3, 1.6), focus: [1114, 486] },
+    { f: "te", t0: c.te, t1: c.back, lay: () => LAYOUT.right,
+      pose: (t) => W("te").pose({ blocks: D(t, A("在H一百上") - .2, 1.2), pegs: D(t, A("TransformerEngine") - .2, 1.4),
+        measure: D(t, A("统计张量") - .1, 1.2) * (1 - D(t, A("缩放系数") - .5, .5)), scale: D(t, A("缩放系数") - .2, 1.4), snap: D(t, A("转换成FP8") - .2, 1.0),
+        lit: t >= A("规格表上") - .1 ? "b8" : t < A("TransformerEngine") ? "b8" : t < A("最大绝对值") ? null : t < A("缩放系数") ? "max" : t < A("转换成FP8") ? "limit" : null }),
+      zoom: (t) => 1 + 0.1 * D(t, A("规格表上") - .3, 1.6) - 0.1 * D(t, A("只在满足条件") - .2, 1.6), focus: [1180, 640] },
+    // “一路退回去”：按拆开的倒序快速闪回，每张约 0.3 秒
+    ...["te", "sm", "die", "pkg", "sxm5"].map((f, i) => ({ f, back: true, t0: c.back + i * 0.32, t1: c.back + (i + 1) * 0.32, lay: () => LAYOUT.full,
+      // 闪回也要完整重设姿态（取该物件正式镜头最后一刻的样子），不能沿用上一次留下的状态，否则分块渲染时每块画面不一样
+      pose: () => { const m = SC.find((s) => s.f === f && !s.back); m.pose(m.t1 - 0.05); }, zoom: () => 1 })),
+    { f: "topo", t0: c.topo, t1: c.end, lay: () => LAYOUT.right,
+      pose: (t) => W("topo").pose({ mine: D(t, A("每颗GPU伸出") - .2, 1.2), others: D(t, A("接到4颗") - .2, 1.0), pulse: clamp01((t - A("任意两颗")) / 1.6),
+        gauge: D(t, A("对比通用的PCIe") - .2, 1.4), merge: D(t, A("在软件看来") - .2, 1.2),
+        lit: t < A("接到4颗") ? "gpu1" : t < A("任意两颗") ? "sw" : t < A("在软件看来") ? "nvlink" : "frame" }), zoom: () => 1 },
+    { f: "hgx", t0: c.end, t1: END + 1, lay: () => LAYOUT.right, zoom: () => 1,
+      pose: () => { assemble("hgx", 1); W("hgx").render(0, { hs: 0, mod: 0, board: 0 }); for (const n of ["hs.cover", "nvs.fins", "socket", "module.focus"]) litBy("hgx", n, false); } },   // 片尾：组装完成、全部熄灭，完整重设
+  ];
+  // ---------- 左侧文字栏：每组从某个锚点开始，下一组开始时淡出 ----------
+  const G = (t, rows) => ({ t, rows });
+  const r = (at, y, html) => ({ at, y, html });
+  COLS = [
+    G(0, [r(0.15, 210, `<span class="big">H100</span>`), r(A("2022年9月20日") + .1, 300, `<span class="sub">2022 年 3 月 22 日 · 发布</span>`),
+      r(A("2022年9月20日") + .6, 352, `<span class="k">2022 年 9 月 20 日 · 全面生产</span>`), r(A("71天后") - .1, 470, `<span class="mid">71 天后</span>`),
+      r(A("ChatGPT上线") - .1, 540, `<span class="sub">2022 年 11 月 30 日 · ChatGPT 上线</span>`)]),
+    G(A("先说结论") - .2, [r(A("算得更快") - .1, 230, `<span class="rule"></span><span class="k">算得更快</span>`),
+      r(A("一千九百七十九") - .2, 330, `<span class="big">1,979</span><span class="unit">TFLOPS</span>`), r(A("FP8稠密算力") - .1, 375, `<span class="note">FP8 稠密理论峰值</span>`),
+      r(A("喂得更快") - .1, 470, `<span class="rule"></span><span class="k">喂得更快</span>`), r(A("三点三五") - .2, 570, `<span class="big">3.35</span><span class="unit">TB/s</span>`), r(A("显存带宽") - .1, 615, `<span class="note">HBM3 显存带宽</span>`),
+      r(A("连得更紧") - .1, 710, `<span class="rule"></span><span class="k">连得更紧</span>`), r(A("九百吉字节") - .2, 810, `<span class="big">900</span><span class="unit">GB/s</span>`), r(A("九百吉字节") + .3, 400, `<span class="note">NVLink 双向合计 · 本集：H100 SXM 80GB</span>`)]),
+    G(A("最外层") - .2, [r(A("八卡底板"), 250, `<span class="k">HGX H100 八卡底板</span>`), r(A("八颗H一百"), 340, `<span class="mid">8</span><span class="unit">颗 H100</span>`),
+      r(A("第三代NVSwitch"), 420, `<span class="mid">4</span><span class="unit">颗第三代 NVSwitch</span>`), r(A("1750亿"), 540, `<span class="sub">1750 亿参数 × 2 字节（16 位）</span>`),
+      r(A("350吉字节") - .2, 630, `<span class="big">350</span><span class="unit">GB · 仅权重</span>`), r(A("四倍多") - .2, 690, `<span class="sub">单颗 80GB 的四倍多</span>`),
+      r(A("最外层") + .5, 860, `<span class="note">外形按 OCP 规格 553 × 416 mm；散热器布局为示意</span>`)]),
+    G(A("拿起其中一颗") - .2, [r(A("SXM模组") - .2, 250, `<span class="k">SXM 模组</span>`), r(A("不是插在主板上") , 300, `<span class="sub">不是插在主板上的显卡</span>`),
+      r(A("高密度连接器") - .1, 400, `<span class="k">高密度连接器 × 2</span>`), r(A("电力和NVLink"), 450, `<span class="sub">电力和 NVLink 信号从这里进出</span>`),
+      r(A("700瓦") - .3, 580, `<span class="big">700</span><span class="unit">W</span>`), r(A("700瓦"), 630, `<span class="note">可配置上限，不是常态功耗</span>`)]),
+    G(c.sxm + .2, [r(A("中间是封装"), 250, `<span class="k">封装</span>`), r(A("两侧是显存堆栈"), 300, `<span class="sub">一颗大芯片，两侧是显存堆栈</span>`)]),
+    G(c.pkg + .2, [r(A("四周有6个位置") - .1, 250, `<span class="mid">6</span><span class="unit">个外围位置</span>`), r(A("计入容量") - .1, 330, `<span class="mid">5</span><span class="unit">个计入容量</span>`),
+      r(A("一共80吉字节") - .2, 430, `<span class="sub">5 × 16GB =</span> <span class="mid">80</span><span class="unit">GB</span>`), r(A("计入容量") + .6, 500, `<span class="note">第 6 个位置：不计入容量，结构未确认</span>`)]),
+    G(A("为什么显存") - .2, [r(A("为什么显存"), 230, `<span class="k">为什么显存贴着芯片放</span>`), r(A("五千一百二十") - .2, 340, `<span class="big">5,120</span><span class="unit">位宽</span>`),
+      r(A("硅中介层") - .1, 400, `<span class="sub">走线做在硅中介层上</span>`), r(A("8层DRAM") - .2, 490, `<span class="sub">每个堆栈：8 层 DRAM + 基底芯片</span>`),
+      r(A("三点三五", 2) - .2, 610, `<span class="big">3.35</span><span class="unit">TB/s</span>`), r(A("对大模型来说"), 680, `<span class="sub">带宽决定算力能用上多少</span>`),
+      r(A("为什么显存") + .8, 860, `<span class="note">剖面 · 示意，厚度不按比例；8-Hi 为建模假设</span>`)]),
+    G(c.die + .2, [r(A("GH一百") - .2, 230, `<span class="k">GH100</span>`), r(A("814平方毫米") - .1, 310, `<span class="mid">814</span><span class="unit">mm²</span>`),
+      r(A("约800亿") - .1, 390, `<span class="mid">约 800 亿</span><span class="unit">晶体管</span>`), r(A("台积电") - .1, 460, `<span class="sub">台积电 4N 工艺</span>`),
+      r(A("一共144个") - .3, 580, `<span class="big">144</span><span class="unit">SM · 8×9×2</span>`), r(A("完整设计60兆字节") - .2, 650, `<span class="sub">L2 完整设计 60MB · 12 个显存控制器</span>`),
+      r(A("再往里") + .8, 860, `<span class="note">区块位置与大小为示意</span>`)]),
+    G(A("但H一百") - .2, [r(A("但H一百"), 230, `<span class="k">H100 SXM 启用</span>`), r(A("SM启用132个") - .2, 340, `<span class="mid">132</span><span class="unit">/ 144 SM</span>`),
+      r(A("缓存启用50兆字节") - .2, 420, `<span class="mid">50</span><span class="unit">/ 60 MB L2</span>`), r(A("显存控制器启用10个") - .2, 500, `<span class="mid">10</span><span class="unit">/ 12 显存控制器</span>`),
+      r(A("SM启用132个") + .4, 560, `<span class="note">未启用的位置为示意，每颗芯片不同</span>`)]),
+    G(A("芯片行业的一般做法") - .2, [r(A("芯片行业的一般做法"), 230, `<span class="k">芯片行业的一般做法</span>`), r(A("局部制造缺陷") - .1, 310, `<span class="sub">局部缺陷 → 测试分档 → 关闭部分单元</span>`),
+      r(A("合格产品") - .2, 370, `<span class="sub">更多芯片成为合格产品</span>`), r(A("NVIDIA公开的是") , 470, `<span class="sub">公开：启用数量</span>`), r(A("没有公开"), 520, `<span class="note">未公开：每颗芯片关闭的原因</span>`)]),
+    G(c.sm + .2, [r(A("4个执行分区") - .1, 230, `<span class="k">一个 SM · 4 个执行分区</span>`), r(A("32个FP32"), 290, `<span class="sub">每区：调度器、寄存器、32 个 FP32、1 个 Tensor Core</span>`),
+      r(A("一万六千八百九十六") - .2, 400, `<span class="big">16,896</span><span class="unit">CUDA 核心</span>`), r(A("528个") - .2, 490, `<span class="mid">528</span><span class="unit">Tensor Core · 第四代</span>`),
+      r(A("共用256千字节") - .2, 590, `<span class="sub">L1 / 共享内存合计 256KB</span>`), r(A("L1和共享内存合用"), 640, `<span class="note">共享内存最多可配 228KB</span>`)]),
+    G(A("一是TMA") - .2, [r(A("一是TMA"), 230, `<span class="k">TMA · 成块搬数据</span>`), r(A("线程不用"), 290, `<span class="sub">线程不用逐个算地址、搬运</span>`),
+      r(A("同时进行") - .3, 350, `<span class="sub">搬下一块的同时，计算上一块</span>`), r(A("仍然得等") - .2, 410, `<span class="note">要用的数据，仍然得等它搬完（同步）</span>`)]),
+    G(c.cl + .2, [r(A("二是线程块集群"), 230, `<span class="k">线程块集群</span>`), r(A("同一个GPC"), 290, `<span class="sub">同一个 GPC 里的几个 SM</span>`),
+      r(A("互相同步"), 350, `<span class="sub">可以互相同步</span>`), r(A("分布式共享内存") - .1, 410, `<span class="sub">分布式共享内存：彼此访问，各自独立</span>`)]),
+    G(c.fp8 + .2, [r(A("TensorCore里") - .2, 230, `<span class="k">Tensor Core</span>`), r(A("矩阵乘法") - .2, 290, `<span class="sub">一次算一小块矩阵乘法：D = A × B + C</span>`),
+      r(A("新支持FP8") - .2, 390, `<span class="k">FP16 → FP8</span>`), r(A("舍入和缩放") - .2, 450, `<span class="sub">16 位编码成 8 位：舍入 + 缩放</span>`),
+      r(A("存储减半") - .2, 550, `<span class="mid">存储减半</span>`), r(A("同样多的数"), 610, `<span class="note">同样多的数</span>`)]),
+    G(c.te + .2, [r(A("在H一百上"), 230, `<span class="k">H100 · 稠密理论峰值</span>`), r(A("一千九百七十九", 2) - .3, 330, `<span class="big">1,979</span><span class="unit">FP8</span>`),
+      r(A("两倍") - .3, 410, `<span class="mid">约 990</span><span class="unit">FP16 / BF16 · 约 2 倍</span>`), r(A("不一定快一倍") - .3, 480, `<span class="note">理论峰值，实际模型不一定快一倍</span>`),
+      r(A("代价是精度"), 560, `<span class="sub">代价：精度</span>`)]),
+    G(A("所以有TransformerEngine") - .2, [r(A("TransformerEngine") - .1, 230, `<span class="k">Transformer Engine</span>`), r(A("统计张量") , 300, `<span class="sub">统计：最大绝对值</span>`),
+      r(A("缩放系数") - .1, 360, `<span class="sub">缩放：算出缩放系数</span>`), r(A("转换成FP8") - .1, 420, `<span class="sub">转换：FP8 去算</span>`), r(A("更高精度") - .2, 480, `<span class="sub">需要的地方保留更高精度</span>`),
+      r(A("TransformerEngine") + .8, 560, `<span class="note">概念流程，示意</span>`),
+      r(A("三千九百五十八") - .3, 680, `<span class="mid">3,958 *</span>`), r(A("结构化稀疏") - .1, 740, `<span class="note">* 结构化稀疏，满足条件才成立</span>`)]),
+    G(c.back - .1, []),                                       // 倒退闪回时物件铺满画面：文字栏先整组退场，不压在图上
+    G(c.topo + .2, [r(A("每颗GPU伸出") - .1, 230, `<span class="k">每颗 GPU · 18 条 NVLink</span>`), r(A("接到4颗") - .1, 290, `<span class="sub">分到 4 颗 NVSwitch：4 / 5 / 5 / 4</span>`),
+      r(A("九百吉字节", 2) - .3, 400, `<span class="big">900</span><span class="unit">GB/s NVLink</span>`), r(A("128吉字节") - .3, 480, `<span class="mid">128</span><span class="unit">GB/s PCIe Gen5</span>`),
+      r(A("7倍") - .2, 550, `<span class="sub">约 7 倍 · 均为双向合计</span>`), r(A("每颗GPU伸出") + .8, 860, `<span class="note">逻辑连接示意，不是 PCB 走线</span>`)]),
+    G(c.end + .2, [r(A("算的位数更少") - .1, 260, `<span class="rule"></span><span class="k">算的位数更少</span>`), r(A("算的位数更少") + .3, 305, `<span class="note">FP8 · Tensor Core</span>`),
+      r(A("喂的数据更快") - .1, 390, `<span class="rule"></span><span class="k">喂的数据更快</span>`), r(A("喂的数据更快") + .3, 435, `<span class="note">HBM3 · 3.35 TB/s</span>`),
+      r(A("连接更紧") - .1, 520, `<span class="rule"></span><span class="k">连接更紧</span>`), r(A("连接更紧") + .3, 565, `<span class="note">NVLink · 900 GB/s</span>`),
+      r(A("下一集") - .1, 700, `<span class="note">下一集</span>`), r(A("H二百") - .2, 760, `<span class="mid">H200</span>`), r(A("只换了显存") - .2, 820, `<span class="sub">几乎同一颗芯片，只换了显存</span>`)]),
+  ];
+  $("#col").innerHTML = COLS.map((g, gi) => g.rows.map((row, ri) => `<div class="it" data-g="${gi}" data-r="${ri}">${row.html}</div>`).join("")).join("");
+  // 每组从 y=200 起按实际高度往下排；标了 y ≥ 800 的免责说明贴在文字栏底部（y=880 往上）
+  COLS.forEach((g, gi) => { let y = 200; const GAP = { big: 22, mid: 16, k: 10, sub: 8, note: 8 };
+    g.rows.forEach((row, ri) => { const el = document.querySelector(`[data-g="${gi}"][data-r="${ri}"]`);
+      if (row.y >= 800) { el.style.top = (880 - el.offsetHeight) + "px"; return; }
+      const cls = (row.html.match(/class="(big|mid|k|sub|note)"/) || [, "sub"])[1];
+      if (ri > 0 && /class="rule"/.test(row.html)) y += 18;            // 新的一项（带短横线）前多留一点
+      el.style.top = y + "px"; y += el.offsetHeight + GAP[cls]; }); });
+}
+
+function subtitle(t) {
+  const s = TL.sentences.find((s) => t >= s.s - .05 && t <= s.e + .25);
+  if (!s) { $("#subs").textContent = ""; return; }
+  let str = s.text.replace(/[，、：]$/, "");
+  if (str.length > 30) { const mid = Math.floor(str.length / 2); let cut = -1;
+    for (let d = 0; d < mid; d++) { if ("，、：；".includes(str[mid + d])) { cut = mid + d + 1; break; } if ("，、：；".includes(str[mid - d])) { cut = mid - d + 1; break; } }
+    if (cut < 0) cut = mid; str = str.slice(0, cut) + "\n" + str.slice(cut); }
+  $("#subs").innerText = str;
+}
+
+window.render = (t) => {
+  // 物件图
+  const vis = new Map();
+  for (const sc of SC) {
+    const fadeIn = sc.back ? 0.12 : 0.35, kin = sc.t0 < 0 ? 1 : clamp01((t - sc.t0) / fadeIn), kout = 1 - clamp01((t - sc.t1) / (sc.back ? 0.12 : 0.35));
+    const a = Math.min(kin, kout); if (a <= 0 || t < sc.t0) continue;
+    if ((vis.get(sc.f)?.a ?? 0) < a) vis.set(sc.f, { a, sc });
+  }
+  for (const f of FIGS) {
+    const v = vis.get(f); if (!v) { place(f, 0, LAYOUT.full); continue; }
+    const { sc, a } = v; sc.pose(t); const drift = sc.back ? 1 : 1 + 0.04 * clamp01((t - Math.max(0, sc.t0)) / Math.max(4, Math.min(sc.t1, END) - Math.max(0, sc.t0)));
+    place(f, a, sc.lay(t), sc.zoom(t) * drift, sc.focusAt ? sc.focusAt(t) : sc.focus || [960, 540]);
+  }
+  // 文字栏：每组内逐行淡入上移；下一组开始时整组淡出
+  COLS.forEach((g, gi) => { const next = COLS[gi + 1]?.t ?? 1e9, out = 1 - clamp01((t - next) / 0.3);
+    g.rows.forEach((row, ri) => { const el = document.querySelector(`[data-g="${gi}"][data-r="${ri}"]`); const p = D(t, Math.max(row.at, g.t), .45) * out;
+      el.style.opacity = p; el.style.transform = `translateY(${(1 - p) * 12}px)`; }); });
+  subtitle(t);
+  // 片尾淡出到纸色
+  $("#stage").style.opacity = 1 - clamp01((t - (END - 1.4)) / 1.2);
+};
+window.__total = END;
+(async () => {
+  await Promise.all(Object.values(frames).map((el) => new Promise((ok) => { const chk = () => (el.contentWindow && el.contentWindow.__ready ? ok() : setTimeout(chk, 50)); el.addEventListener("load", chk); })));
+  // 物件图缩小后细线太淡：把 Anatomy 的线宽和点径调粗
+  for (const f of FIGS) { const d = W(f).document; const st = d.createElement("style"); st.textContent = ".iso{--anatomy-weight:1px} .iso-solid[data-lit]>.iso-edge{stroke-width:1.6px}"; d.head.appendChild(st); }
+  build();
+  if (missing.length) { console.error("找不到锚点：" + [...new Set(missing)].join(" / ")); window.__bootFailed = true; return; }
+  window.render(0); window.__ready = true;
+})();
+</script></body></html>
