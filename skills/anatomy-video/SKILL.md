@@ -29,7 +29,7 @@ description: 把 Anatomy 等距物件图做成带配音、字幕、配乐的讲�
 浏览器工具统一用 `uv run --with playwright==1.63.0 [--with pillow --with numpy] python …`（版本号不能省，见已知坑）。断网时加 `--offline`（包都缓存在 F 盘）。
 
 0. **开工自检**：`doctor.py --tts`。全部通过再开始。
-1. **参数**：资料和参考图可交给子 agent 搜集（只收链接，下载前问用户）；调研完把 C 盘 tool-results 里缓存的 PDF 移到 `research/pdf` → 自己核对、复算后直接采用（用户 2026-10-15 定：核对过就用，不用问）；只有会改变讲法的官方冲突才找用户。
+1. **资料调查与技术核验**：先读 `references/资料核验与子agent分工.md`。主 agent 定义产品版本和断言清单，将规格、架构机制、结构视觉分配给子 agent 并行调查，另行安排独立复核；小选题可合并工作包。每项返回原始来源、版本、页码 / 表号、口径及不确定项。主 agent 回读关键原文、复算、处理冲突，按 `templates/参数口径表.md` 记录证据与稿件 / 镜头映射。未经核验的参数不能作为确定事实进入配音；几何审计不能代替事实核查。工具不可用时顺序执行并如实记录，不虚称多 agent 验证。详细分工和放行条件见参考文件。
 2. **配音稿**：读法写法写进 `voice/script.txt`（H一百、吉字节……）。
    `terms.py voice/script.txt build/terms` → 禁用写法必须改完；新术语自动生成 `_试读.txt`。
    `tts.py build/terms_试读.txt build/trial` → 试读音频 + 读法对照 → 关口 1。确认后写回 `references/读音表.md`。
@@ -63,6 +63,8 @@ description: 把 Anatomy 等距物件图做成带配音、字幕、配乐的讲�
 
 ## 参考
 
+- `references/资料核验与子agent分工.md`：并行调查、独立复核、来源标准、口径复算、冲突裁决和制作前检查
+- `templates/参数口径表.md`：断言 ID、来源定位、证据状态、复核意见与镜头映射模板
 - `references/视频版规范.md`：画面、指认、读数、动作节奏、配音、不出框、质检、文件组织
 - `references/成片页约定.md`：成片页必须提供的接口和写镜头的 8 条规矩
 - `references/读音表.md`：全系列共用读法；每集新增写回
