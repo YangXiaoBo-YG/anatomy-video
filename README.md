@@ -18,13 +18,22 @@
 
 阅读 [视频 skill](skills/anatomy-video/SKILL.md)。需要 Python、Node.js、FFmpeg 和 Chromium；具体环境检测见 `scripts/doctor.py`。目前脚本优先适配 Windows 和 F 盘工作目录，其他系统需调整环境路径。
 
-## H100 示例
+## 最新视频示例：镜头跟随与数据流
+
+用户选定的 36 秒样片：浅色等距物件图、电光蓝强调，镜头沿读取路径推进和横移，数据经过的站点依次点亮，最后拉回展示路径与延迟对比。
+
+![镜头推进与站点指认](showcase/camera-flow/closeup.png)
+![读取路径与数据流](showcase/camera-flow/overview.png)
+
+[观看或下载示例视频](https://github.com/YangXiaoBo-YG/anatomy-video/releases/tag/camera-flow-demo-v1) · [仓库内 MP4](showcase/camera-flow/demo.mp4)
+
+## 早期案例：H100
 
 ![系列封面](showcase/h100/cover.png)
 ![SXM5 模组](showcase/h100/sxm5.png)
 ![HGX 拆解](showcase/h100/hgx-exploded.png)
 
-[观看 30 秒示例视频](showcase/h100/demo.mp4) · [完整示例](../../releases/tag/h100-demo-v1)
+[观看 30 秒早期示例](showcase/h100/demo.mp4) · [完整早期示例](https://github.com/YangXiaoBo-YG/anatomy-video/releases/tag/h100-demo-v1)
 
 示例为非官方技术科普，部分位置、比例和动作采用示意表达；视频中的机械类比不代表芯片内部实物结构。
 
